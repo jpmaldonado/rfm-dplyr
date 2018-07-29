@@ -1,0 +1,107 @@
+---
+title: "Segmentación RFM con dplyr"
+output:
+  html_document:
+    df_print: paged
+---
+
+La segmentación RFM (RFM = recency, frequency, monetary en inglés) es una manera muy sencilla y sorprendentemente efectiva de crear segmentos de clientes.
+
+En este post te mostramos como hacerlo usando los paquetes `dplyr` y `tidyverse`.
+
+
+```{r, echo=FALSE}
+#setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+df <- read.csv("./data/orders.csv")
+
+```
+
+
+Después de cargar las librerías, checamos los datos rápidamente:
+
+```{r}
+head(df)
+```
+
+Todo se ve bien, pero hay que checar los tipos también:
+
+```{r}
+summary(df)
+```
+
+La columna `Date` no se interpretó como quisiéramos. ¿Cómo nos dimos cuenta? El formato en RStudio es normalmente YYYY-MM-DD, que no tiene la forma en la que lo leímos. Corregimos este formato un poquito:
+
+```{r}
+df$Date <- as.Date(df$Date, format = "%m/%d/%Y")
+summary(df)
+```
+
+
+Ahora sí, a lo que vamos: tenemos que calcular **recency** (el tiempo desde la última compra), **frequency** (el número de compras) y **monetary** (el monto total que el cliente ha gastado en nuestra tienda). Estas tres variables nos dan información importante sobre los clientes: los clientes que han comprado poquito y hace tiempo (recency alto y frequency bajo) tal vez no van a volver. En cambio, los clientes que compraron recientemente y que han comprado varias veces (recency bajo y frequency o monetary alto) posiblemente vuelvan.
+
+Calculemos los resúmenes por cliente:
+
+```{r}
+rfm <- df%>%
+  group_by(Customer.ID) %>%
+  summarise(last_purchase=max(Date), 
+            recency = as.double(difftime("2016-01-01",
+                                         as.Date(last_purchase, origin="1970-01-01"),  
+                                        units = "day")), 
+            frequency = n(), 
+            monetary = sum(Subtotal)
+            )
+  
+head(rfm)
+```
+
+
+Usamos un `group_by` (que siempre va seguido de un `summarise`). También creamos una columna adicional, `last_purchase` que nos ayuda a calcular recency. Observa que necesitamos dar una fecha de referencia para recency, en este caso, el 1 de enero del 2016. 
+
+En cualquier proyecto de ciencia de datos, es recomendable tener ciertas preguntas en mente. Los datos nos darán la respuesta de esas hipótesis, y en base a la respuesta podemos tomar decisions.
+
+Preguntémosle a nuestros datos: Qué tan redituables son los clientes que han comprado recientemente?
+
+```{r}
+rfm %>% 
+  ggplot(aes(x=recency, y=monetary, size=monetary, color=monetary)) + 
+  geom_point(position = "jitter")+
+  theme_bw()
+```
+
+Por la gráfica parece que nuestros mejores clientes dejaron de comprar hace 1000 días... ¿qué pasó en ese tiempo? No sabemos, pero ya tenemos una pista en donde buscar.
+
+Otra pregunta interesante: ¿cuál es la diferencia entre los clientes que compran una vez y los que compran más de una vez?
+
+```{r}
+rfm2 <- rfm %>% 
+        mutate(one_time = ifelse(frequency==1, "One-timer","More than once"), 
+               avg_per_purchase = monetary/frequency) %>%
+        group_by(one_time)
+```
+
+Aquí usamos `mutate` para cambiar los datos de la columna frequency. Ahora que tenemos esto en nuestro dataframe rfm2, podemos ver cómo se ven las distribuciones:
+
+
+```{r}
+rfm2 %>% ggplot(aes(x=one_time, y=monetary))+geom_violin()
+```
+
+Mmm... parece que tenemos una observación que sesga nuestros datos! Podemos excluirla con `filter`:
+
+```{r}
+rfm2 %>% 
+  filter(monetary<1000)%>%
+  ggplot(aes(x=one_time, y=monetary))+geom_violin()+
+  xlab("One-time purchasers")+theme_bw()
+```
+
+Parece que nuestros clientes que compran una sola vez no gastan tanto. ¿Convendrá más enfocarse entonces en los clientes existentes, que en adquirir nuevos? Poniendo esta información en contexto con datos sobre los costos de una campaña de adquisición podemos obtener la respuesta.
+
+Como vemos, este análisis se puede extender muy fácil para incorporar diferentes tipos de datos, y nos puede dar respuestas útiles muy fácilmente.

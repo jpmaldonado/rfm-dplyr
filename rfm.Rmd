@@ -1,0 +1,109 @@
+---
+title: "RFM Segmentation with dplyr"
+output:
+  html_document:
+    df_print: paged
+---
+
+RFM segmentation (RFM = recency, frequency, monetary) is a very easy and surprisingly useful strategy for segmenting customers. 
+
+In this notebook we will show how can this be done in R using the `dplyr` package.
+
+
+```{r, echo=FALSE}
+#setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+df <- read.csv("./data/orders.csv")
+
+```
+
+
+Let's do a quick inspection of the data:
+
+```{r}
+head(df)
+```
+
+and check that the data types are correctly read:
+
+```{r}
+summary(df)
+```
+
+First, observe that the `Date` variable is not correctly read. How do we know that? The date format in RStudio is in the form YYYY-MM-DD, which is clearly not what is shown above. So we do a little type coercion here.
+
+```{r}
+df$Date <- as.Date(df$Date, format = "%m/%d/%Y")
+summary(df)
+```
+
+
+Now, to the point: we need to calculate **recency** (the time spent since the last purchase), **frequency** (number of repeat purchases) and **monetary** (total money spent in our shop). Once we have these three quantities we can create segments of our customers: we want to identify those customers that bought recently (recency is low), are regular customers (high frequency) and have spent good money on us (monetary is high). These customers might be more important from us than, say, customers with low frequency and low monetary. There are also those customers in the middle, with moderately high frequency and monetary, but also very high recency: would there be a way to bring those back? What do they want? Perhaps these customers bought a product we no longer offer. 
+
+Let's calculate the RFM summary of each customer to address these questions:
+
+```{r}
+rfm <- df%>%
+  group_by(Customer.ID) %>%
+  summarise(last_purchase=max(Date), 
+            recency = as.double(difftime("2016-01-01",
+                                         as.Date(last_purchase, origin="1970-01-01"),  
+                                        units = "day")), 
+            frequency = n(), 
+            monetary = sum(Subtotal)
+            )
+  
+head(rfm)
+```
+
+
+We use a `group_by` statement (which must be always followed by a `summarise`). We create an auxiliary column, `last_purchase` to help us calculate recency, by substracting it from a reference date, in this case, January 1, 2016. 
+
+On any data science project we must take a scientific mindset: we need to ask concrete questions to our data, formulate hypothesis. Data science projects done "to get insight" are usually fruitless.
+
+So, let's ask our data: Are customers purchasing more recently more profitable?
+
+```{r}
+rfm %>% 
+  ggplot(aes(x=recency, y=monetary, size=monetary, color=monetary)) + 
+  geom_point(position = "jitter")+
+  theme_bw()
+```
+
+
+It's a bit hard to read, but it seems that our more profitable clients where around 1000 days ago. What happened then? That's a great question for our operations people!
+
+Another interesting question to ask: Do one-time-purchasers spend more or less in average? Let's find out!
+
+```{r}
+rfm2 <- rfm %>% 
+        mutate(one_time = ifelse(frequency==1, "One-timer","More than once"), 
+               avg_per_purchase = monetary/frequency) %>%
+        group_by(one_time)
+```
+
+Here we use `mutate` to change the frequency column for an indicator of how much money people have spent in average. This is all stored in an `rfm2` dataframe to do more analysis.
+
+Another question we can ask our data: what is the distribution of money spent between one-time purchase and the rest?
+
+```{r}
+rfm2 %>% ggplot(aes(x=one_time, y=monetary))+geom_violin()
+```
+
+Ok, we obviously have an outlier. Let's get rid of it using `filter`:
+
+```{r}
+rfm2 %>% 
+  filter(monetary<1000)%>%
+  ggplot(aes(x=one_time, y=monetary))+geom_violin()+
+  xlab("One-time purchasers")+theme_bw()
+```
+
+We see that one-time purchasers tend to spend much less than our recurrent customers. Would it be worth perhaps to focus on developing our existing customers than in acquiring? Our data suggests this might be the case.
+
+As you see, there are many ways in which this analysis can be extended and, if available, combined with other data sources. 
